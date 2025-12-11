@@ -145,6 +145,11 @@ def recibir_mensajes():
         print(f"Error: {e}", flush=True)
         return "EVENT_RECEIVED", 200
 
+# Agrega esta ruta para la página de inicio
+@app.route("/")
+def home():
+    return "¡Hola! El bot de Verified Tech Solutions está vivo y funcionando 🤖", 200
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 3000))
     app.run(host='0.0.0.0', port=port, debug=True)
