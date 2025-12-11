@@ -2,119 +2,122 @@ from flask import Flask, request
 import requests
 import os
 from supabase import create_client, Client
+from openai import OpenAI  # <--- NUEVO INVITADO
 
 app = Flask(__name__)
 
 # ===============================================================
-#  1. CONFIGURACIÓN Y CREDENCIALES
+#  1. CONFIGURACIÓN
 # ===============================================================
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 NUMERO_ADMIN = os.environ.get("NUMERO_ADMIN")
 
-# Configuración de Supabase
+# Supabase
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
-# Iniciamos el cliente de Base de Datos
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ===============================================================
-#  2. DATOS DEL NEGOCIO (Estáticos)
-# ===============================================================
-# Al estar aquí, ya no necesitas el archivo datg.json
-DATOS_NEGOCIO = {
-    "mensaje_bienvenida": "👋 ¡Hola! Bienvenido a nuestro servicio de asistencia automatizada.",
-    "respuesta_ubicacion": "📍 Estamos ubicados en: Av. Siempre Viva 123, Ciudad de México.",
-    "respuesta_precios": {
-        "imagen": "https://images.unsplash.com/photo-1633158829585-23ba8f7c8caf?q=80&w=2070&auto=format&fit=crop", 
-        "caption": "💰 *Lista de Precios*\n\n- Consultoría: $50 USD\n- Desarrollo Web: $300 USD\n- Soporte: $20 USD/hora"
-    }
-}
+# OpenAI
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+client_ai = OpenAI(api_key=OPENAI_API_KEY)
 
 # ===============================================================
-#  3. FUNCIONES DE BASE DE DATOS (El Cerebro Nuevo) 🧠
+#  2. EL CEREBRO DE LA EMPRESA HIPOTÉTICA (System Prompt) 🧠
 # ===============================================================
+# AQUÍ es donde "entrenamos" al bot con los datos falsos del negocio
+SYSTEM_PROMPT = """
+Eres el asistente virtual de 'VTS Demo', una empresa tecnológica ficticia.
+Tu tono es: Profesional, breve y amable.
 
-def obtener_usuario(telefono):
-    """Busca al usuario en Supabase. Si no existe, lo crea."""
+DATOS DEL NEGOCIO:
+- Servicios: 
+  1. Consultoría Digital ($50 USD/hora).
+  2. Desarrollo Web (Desde $300 USD).
+  3. Soporte Técnico ($20 USD/hora).
+- Ubicación: Av. Innovación 123, Mundo Digital.
+- Horario: Lunes a Viernes de 9 AM a 6 PM.
+
+REGLAS:
+1. Si te preguntan precios, dalos exactos según la lista.
+2. Si quieren agendar, diles que usen el botón 'Agendar Cita' del menú.
+3. Respuestas cortas (máximo 50 palabras).
+4. Si te preguntan algo fuera del tema (ej: cocina, deportes), di cortésmente que solo hablas de tecnología.
+"""
+
+# ===============================================================
+#  3. FUNCIONES DE IA
+# ===============================================================
+def consultar_chatgpt(mensaje_usuario):
+    """Envía el mensaje a OpenAI y recibe respuesta."""
     try:
-        # Buscamos si ya existe
-        response = supabase.table("clientes").select("*").eq("telefono", telefono).execute()
-        data = response.data
-        
-        if len(data) > 0:
-            return data[0] # Retorna el usuario encontrado
-        else:
-            # Si no existe, lo creamos con valores por defecto
-            nuevo_usuario = {"telefono": telefono, "estado_flujo": "INICIO"}
-            supabase.table("clientes").insert(nuevo_usuario).execute()
-            return nuevo_usuario
+        completion = client_ai.chat.completions.create(
+            model="gpt-4o-mini",  # Modelo rápido y económico
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": mensaje_usuario}
+            ]
+        )
+        return completion.choices[0].message.content
     except Exception as e:
-        print(f"⚠️ Error DB (Lectura): {e}")
-        # En caso de emergencia, devolvemos un usuario temporal en memoria
+        print(f"Error OpenAI: {e}")
+        return "Lo siento, estoy teniendo problemas para pensar ahora mismo."
+
+# ===============================================================
+#  4. FUNCIONES DE BASE DE DATOS
+# ===============================================================
+def obtener_usuario(telefono):
+    try:
+        response = supabase.table("clientes").select("*").eq("telefono", telefono).execute()
+        if len(response.data) > 0:
+            return response.data[0]
+        else:
+            nuevo = {"telefono": telefono, "estado_flujo": "INICIO"}
+            supabase.table("clientes").insert(nuevo).execute()
+            return nuevo
+    except Exception as e:
+        print(f"Error DB: {e}")
         return {"telefono": telefono, "estado_flujo": "INICIO", "nombre": ""}
 
 def actualizar_estado(telefono, nuevo_estado, nombre=None):
-    """Actualiza en qué paso va el usuario."""
     try:
-        datos_a_actualizar = {"estado_flujo": nuevo_estado}
-        if nombre:
-            datos_a_actualizar["nombre"] = nombre
-            
-        supabase.table("clientes").update(datos_a_actualizar).eq("telefono", telefono).execute()
-    except Exception as e:
-        print(f"⚠️ Error DB (Escritura): {e}")
+        data = {"estado_flujo": nuevo_estado}
+        if nombre: data["nombre"] = nombre
+        supabase.table("clientes").update(data).eq("telefono", telefono).execute()
+    except:
+        pass
 
 # ===============================================================
-#  4. FUNCIONES DE ENVÍO DE WHATSAPP
+#  5. FUNCIONES DE ENVÍO
 # ===============================================================
-def enviar_mensaje_texto(telefono, texto):
+def enviar_mensaje(telefono, texto):
     url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {"messaging_product": "whatsapp", "to": telefono, "type": "text", "text": {"body": texto}}
-    try:
-        requests.post(url, headers=headers, json=data)
-    except Exception as e:
-        print(f"Error envío texto: {e}")
+    requests.post(url, headers=headers, json=data)
 
-def enviar_mensaje_botones(telefono, texto_cuerpo, botones):
+def enviar_botones(telefono, texto, botones):
     url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    lista_botones = [{"type": "reply", "reply": {"id": f"btn_{i}", "title": b}} for i, b in enumerate(botones)]
-    
+    lista = [{"type": "reply", "reply": {"id": f"btn_{i}", "title": b}} for i, b in enumerate(botones)]
     data = {
         "messaging_product": "whatsapp", "to": telefono, "type": "interactive",
-        "interactive": {"type": "button", "body": {"text": texto_cuerpo}, "action": {"buttons": lista_botones}}
+        "interactive": {"type": "button", "body": {"text": texto}, "action": {"buttons": lista}}
     }
-    try:
-        requests.post(url, headers=headers, json=data)
-    except Exception as e:
-        print(f"Error envío botones: {e}")
-
-def enviar_mensaje_imagen(telefono, link_imagen, caption):
-    url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    data = {"messaging_product": "whatsapp", "to": telefono, "type": "image", "image": {"link": link_imagen, "caption": caption}}
-    try:
-        requests.post(url, headers=headers, json=data)
-    except Exception as e:
-        print(f"Error envío imagen: {e}")
+    requests.post(url, headers=headers, json=data)
 
 # ===============================================================
-#  5. WEBHOOK (Lógica Principal)
+#  6. WEBHOOK
 # ===============================================================
 @app.route('/webhook', methods=['GET'])
-def verificar_token():
-    mode = request.args.get('hub.mode')
-    token = request.args.get('hub.verify_token')
-    if mode == 'subscribe' and token == VERIFY_TOKEN:
+def verificar():
+    if request.args.get('hub.mode') == 'subscribe' and request.args.get('hub.verify_token') == VERIFY_TOKEN:
         return request.args.get('hub.challenge'), 200
     return "Error", 403
 
 @app.route('/webhook', methods=['POST'])
-def recibir_mensajes():
+def recibir():
     body = request.get_json()
     try:
         if body.get("object"):
@@ -125,71 +128,60 @@ def recibir_mensajes():
             if "messages" in value:
                 message = value["messages"][0]
                 numero = message["from"]
-                
-                # PARCHE MÉXICO
                 if numero.startswith("521"): numero = numero.replace("521", "52", 1)
 
-                # --- 1. OBTENER USUARIO DE BASE DE DATOS ---
-                usuario_db = obtener_usuario(numero)
-                estado_actual = usuario_db.get("estado_flujo", "INICIO")
-                nombre_guardado = usuario_db.get("nombre", "")
+                usuario = obtener_usuario(numero)
+                estado = usuario.get("estado_flujo", "INICIO")
 
-                # --- 2. DETECTAR CONTENIDO ---
-                tipo_mensaje = message["type"]
-                texto_usuario = ""
-                if tipo_mensaje == "text":
-                    texto_usuario = message["text"]["body"]
-                elif tipo_mensaje == "interactive":
-                    texto_usuario = message["interactive"]["button_reply"]["title"]
+                # Detectar tipo de mensaje
+                tipo = message["type"]
+                texto = ""
+                es_boton = False
+                
+                if tipo == "text":
+                    texto = message["text"]["body"]
+                elif tipo == "interactive":
+                    texto = message["interactive"]["button_reply"]["title"]
+                    es_boton = True
 
-                texto_usuario_lower = texto_usuario.lower()
-                print(f"📩 {numero} ({estado_actual}): {texto_usuario}", flush=True)
-                
-                # ==================================================
-                #  MÁQUINA DE ESTADOS (CON SUPABASE)
-                # ==================================================
-                
-                # --- CASO A: RECOLECTANDO DATOS PARA CITA ---
-                if estado_actual == 'ESPERANDO_NOMBRE':
-                    nuevo_nombre = texto_usuario.title()
-                    actualizar_estado(numero, 'ESPERANDO_SERVICIO', nombre=nuevo_nombre)
-                    enviar_mensaje_botones(numero, f"Gusto en saludarte, {nuevo_nombre}. ¿Qué servicio te interesa?", ["Consultoría", "Desarrollo Web", "Soporte"])
-                
-                elif estado_actual == 'ESPERANDO_SERVICIO':
-                    servicio_elegido = texto_usuario
-                    
-                    enviar_mensaje_texto(numero, f"¡Listo {nombre_guardado}! Agendamos tu interés en: {servicio_elegido}.")
-                    
-                    if NUMERO_ADMIN:
-                        enviar_mensaje_texto(NUMERO_ADMIN, f"🔔 *NUEVA CITA (DB)*\nCliente: {nombre_guardado}\nTel: {numero}\nServicio: {servicio_elegido}")
-                    
-                    actualizar_estado(numero, 'INICIO') # Reiniciamos ciclo
+                print(f"📩 Recibido: {texto} | Estado: {estado}")
 
-                # --- CASO B: MENÚ PRINCIPAL ---
-                else:
-                    if "agendar" in texto_usuario_lower:
+                # --- LÓGICA HÍBRIDA (BOTONES vs IA) ---
+
+                # 1. Si estamos capturando datos específicos (Nombre), ignoramos a la IA
+                if estado == 'ESPERANDO_NOMBRE':
+                    actualizar_estado(numero, 'INICIO', nombre=texto) # Guardamos nombre
+                    enviar_botones(numero, f"Gracias {texto}. ¿En qué puedo ayudarte hoy?", ["Consultar Precios", "Hablar con IA", "Agendar Cita"])
+                    return "OK", 200
+
+                # 2. Si es un BOTÓN, usamos lógica rígida (rápida y segura)
+                if es_boton:
+                    if "Precios" in texto:
+                        enviar_mensaje(numero, "💰 *Precios VTS Demo:*\n- Consultoría: $50\n- Web: $300\n- Soporte: $20/h")
+                    elif "Agendar" in texto:
                         actualizar_estado(numero, 'ESPERANDO_NOMBRE')
-                        enviar_mensaje_texto(numero, "📝 Para agendar, por favor escribe tu *nombre completo*:")
-                    
-                    elif "precios" in texto_usuario_lower:
-                        info = DATOS_NEGOCIO["respuesta_precios"]
-                        enviar_mensaje_imagen(numero, info["imagen"], info["caption"])
-                        
-                    elif "ubicacion" in texto_usuario_lower or "ubicación" in texto_usuario_lower:
-                        enviar_mensaje_texto(numero, DATOS_NEGOCIO["respuesta_ubicacion"])
-
+                        enviar_mensaje(numero, "Para agendar, necesito tu nombre completo:")
+                    elif "IA" in texto:
+                        enviar_mensaje(numero, "Dime, ¿qué duda tienes sobre nuestros servicios?")
                     else:
-                        # Menú por defecto
-                        enviar_mensaje_botones(numero, DATOS_NEGOCIO["mensaje_bienvenida"], ["💰 Precios", "📍 Ubicación", "📅 Agendar Cita"])
+                        enviar_mensaje(numero, "Opción seleccionada.")
+                
+                # 3. Si es TEXTO LIBRE, usamos a la IA (OpenAI)
+                else:
+                    # Aquí ocurre la magia: La IA lee el System Prompt y responde
+                    respuesta_ia = consultar_chatgpt(texto)
+                    enviar_mensaje(numero, respuesta_ia)
+                    
+                    # Opcional: Volver a mostrar menú para no dejarlo colgado
+                    # enviar_botones(numero, "¿Algo más?", ["Ver Precios", "Agendar"])
 
             return "EVENT_RECEIVED", 200
     except Exception as e:
-        print(f"🔥 Error Crítico: {e}", flush=True)
+        print(f"Error: {e}")
         return "EVENT_RECEIVED", 200
 
 @app.route("/")
-def home():
-    return "Bot VTS Activo y Conectado a DB 🟢", 200
+def home(): return "Bot VTS con IA Activo 🧠", 200
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 3000))
